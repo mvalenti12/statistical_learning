@@ -1,0 +1,308 @@
+---
+title: "Untitled"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#setwd('C:/Users/DanEscario/Desktop/MESIO/Statistical learning/Pr?ctiques/Tree based method')
+
+library(readr)
+soldat <- read_csv("soldat.csv")
+#View(soldat)
+
+if(!require("caret")) install.packages("caret")
+library(caret)
+if(!require("knitr")) install.packages("knitr")
+library(knitr)
+if(!require("doMC")) install.packages("doMC")
+library(doMC)
+if(!require("parallel")) install.packages("parallel")
+library(parallel)
+#doMC::registerDoMC(parallel::detectCores())
+if(!require("dplyr")) install.packages("dplyr")
+library(dplyr)
+if(!require("magrittr")) install.packages("magrittr")
+library(magrittr)
+if(!require("ggplot2")) install.packages("ggplot2")
+library(ggplot2)
+if(!require("scales")) install.packages("scales")
+library(scales)
+if(!require("reshape2")) install.packages("reshape2")
+library(reshape2)
+if(!require("randomForest")) install.packages("randomForest")
+library(randomForest)
+if(!require("gbm")) install.packages("gbm")
+library(gbm)
+```
+
+```{r}
+data<-soldat
+colSums(is.na(data))
+data<-data[,-71]
+n<-nrow(data)
+p<-ncol(data)
+data$y<-as.factor(data$y)
+levels(data$y)[levels(data$y)=="-1"] <- "Insoluble"
+levels(data$y)[levels(data$y)=="1"] <- "Soluble"
+table(data$y)
+
+```
+
+1.Do a short exploratory analysis in order to know some characteristics of each variable
+```{r, cache=TRUE}
+
+summary(data)
+boxplot(data)
+heatmap(as.matrix(scale(data[,!names(data)%in%c('y')])))  
+pr <- princomp(data[,!names(data)%in%c('y')])
+summary(pr)
+plot(pr);plot(pr$scores[,1], pr$scores[,2])
+
+
+```
+The exploratory analysis includes a summary of the main numerical characteristics of each variable, a graphic representation of this attributes through a boxplot, a heat map of the matrix of variables, and a Principal Components Analysis of the data. The PCA shows that the first two principal components only catch 8.9% of the total variance. The first four principal components catch up to the 9.75% of the total variance.  
+---------------------------------------------------------------------------------------
+2. Separate the data into 2 balanced partitions: a training set (2,815 compounds) and a
+test set (2,816 compounds). Use this same partition in the training phase (and validation phase if necessary) and the test phase of each of the sections that are presented below. Use the value 1234 as random seed to do the partition.
+```{r}
+set.seed(1234)
+#inTest <- createDataPartition(y=data$y, p=.5, list=FALSE)
+inTest <- sample(nrow(data),
+                 2816)
+training<-data[-inTest,]
+testing<-data[inTest,]
+```
+
+3. Fit a pruned single tree classifier to predict the aqueous solubility. Assess the performance of the tree by using suitable metrics.
+```{r, cache=TRUE}
+ctrl <- trainControl(method = "repeatedcv", repeats=3, classProbs=TRUE,summaryFunction=twoClassSummary)
+CART1Model <- train (y ~ ., 
+                   data=training, 
+                   method="rpart",
+                   trControl=ctrl, 
+                   metric='ROC',
+                   tuneLength=10,
+                   preProc=c("center","scale"))
+CART1Model
+
+plot(CART1Model)
+```
+
+```{r, cache=TRUE}
+CART2Probs <- predict(CART1Model, newdata = testing, type = "prob")
+CART2Classes <- predict(CART1Model, newdata = testing, type = "raw")
+conf_3<-confusionMatrix(data=CART2Classes,testing$y)
+conf_3
+```
+
+
+4. Fit a Random Forest (RF) classifier to predict the aqueous solubility. Tune the parameters: number of trees and number of variables in each tree, by implementing a grid search procedure. Assess the performance of RF using suitable metrics. Determine which variables are the most relevant in the solubility prediction.
+
+```{r prova, cache=TRUE}
+
+customRF <- list(type = "Classification", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree"), class = rep("numeric", 2), label = c("mtry", "ntree"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, ...)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+   predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
+
+# train model
+control <- trainControl(method="repeatedcv", 
+                        number=5, 
+                        repeats=1,
+                        verbose=TRUE,
+                        classProbs=TRUE,
+                        search = "grid", 
+                        summaryFunction=twoClassSummary)
+
+tunegrid <- expand.grid(.mtry=c(5,10,15), .ntree=c(1000, 1500))
+set.seed(3001)
+custom <- train(y ~ ., 
+                data = training,
+                method=customRF, 
+                metric='ROC', 
+                tuneGrid=tunegrid, 
+                trControl=control)
+summary(custom)
+plot(custom)
+
+
+conf_4<-confusionMatrix(data=predict(custom, newdata = testing, type = "raw"),testing$y)
+
+#summary
+kable(custom$results,digits=2)
+#variable importance
+var.imp <- custom$finalModel %>%
+   varImp() %>%
+  as.data.frame() 
+var.imp$variable <- rownames(var.imp)
+  
+ggplot(var.imp) + 
+  geom_bar(aes(x=variable,
+               y=Overall),
+           stat='identity') + 
+  coord_flip() + 
+  labs(title="Variable Importance")
+
+#Top 10 Variables
+var.imp %>%
+  arrange(desc(Overall)) %>%
+  head(10) %>%
+  ggplot() + 
+  geom_bar(aes(x=variable,
+               y=Overall),
+           stat='identity') + 
+  coord_flip() + 
+  labs(title="Variable Importance")
+
+
+cat(paste0("Best model has mtry=", 
+           custom$bestTune$mtry,
+           " and ntree=",
+           custom$bestTune$ntree))
+
+
+
+```
+
+
+
+
+5. In view of the above metrics, compare the classifiers in 3) and 4).
+```{r}
+obj_plot_comparison<-cbind(conf_3$byClass,conf_4$byClass) %>%
+  as.data.frame() %>%
+  set_colnames(c("Single Tree Classifier", "Tuned Random Forest"))
+obj_plot_comparison$metric<-as.vector(rownames(obj_plot_comparison))
+
+p1 <- melt(obj_plot_comparison,id.var="metric") %>%
+  ggplot(aes(x=metric,
+             y=value,
+             fill=variable)) + 
+  geom_bar(stat='identity',
+           position="dodge",
+           width=.5) + 
+  coord_flip() + 
+  scale_y_continuous(labels=percent)
+
+p1
+
+```
+The tuned Random Forest is superior in ALL of the metrics when being compared to the single tree classifier.
+
+6. Apply the discrete AdaBoost algorithm (with an exponential loss function).
+```{r adaboost, cache=TRUE}
+training<-data[-inTest,]
+training$y <- as.numeric(training$y=="Insoluble")
+adaModel <- gbm(y ~ .,
+               data = training,
+               distribution="bernoulli", #since it is a classification problem
+               n.trees=5000,
+               interaction.depth=4)
+
+
+
+yhat.boost = predict(adaModel,newdata=testing[,!names(testing)%in%c('y')],n.trees=5000)
+
+confusionMatrix(data=as.factor(ifelse(yhat.boost>=0.5,"Insoluble","Soluble")),testing$y)
+```
+
+6.1. Using "stumps" as classification trees compute the misclassification rates of both the learning set and the test set across 2,000 iterations of AdaBoost. Represent these error as a function of the number of boosting iterations.
+```{r stump, cache=TRUE}
+#a stump is 1-node tree.
+#https://stats.stackexchange.com/questions/16501/what-does-interaction-depth-mean-in-gbm
+
+get_classification_rate_by_iterations <- function(x) {
+adaModel = gbm(y ~ .,
+              data = training,
+              distribution="bernoulli", #since it is a classification problem
+              n.trees=x,
+              interaction.depth=1)
+
+adaModel_pred_train <- predict(adaModel, training, n.trees = x, type = "response")
+
+misclassification_rate_train <- mean(as.character(ifelse(adaModel_pred_train>=0.5,"Insoluble","Soluble"))!=ifelse(as.character(training$y)==1,"Insoluble","Soluble"))
+
+adaModel_pred_test <- predict(adaModel, testing, n.trees = x, type = "response")
+
+misclassification_rate_test <- mean(as.character(ifelse(adaModel_pred_test>=0.5,"Insoluble","Soluble"))!=as.character(testing$y))
+
+return(c(misclassification_rate_train,misclassification_rate_test))
+}
+
+misclassification_rates_stump_train <- sapply(seq(0,2000,by=100),function(x) get_classification_rate_by_iterations(x))
+
+cbind(t(misclassification_rates_stump_train),
+      seq(0,2000,by=100)) %>%
+  as.data.frame() %>%
+  set_colnames(c("train set",
+                 "test set",
+                 "iterations")) %>%
+  melt(id="iterations") %>%
+  ggplot(aes(x=iterations,
+             y=value,
+             col=variable)) + 
+  geom_line() + 
+  scale_y_continuous(labels= percent) + 
+  labs(title="Misclassification Rate on learning set and test set",
+       subtitle="across 2000 iterations of AdaBoost",
+       y="Misclassification Rate",
+       col="")
+
+```
+When the number of iterations are higher than 500, missclassification rate drops at a high scale. Before that, it was just constant.
+As expected, missclassification rate is higheron the test set than at the test set, and it decreases as iterations increase.
+
+6.2. Compare the test-set misclassification rates attained by different ensemble classifiers based on trees of sizes: stumps, 4-node trees, 8-node trees, and 16-node trees.
+```{r tree size, cache=TRUE}
+get_test_classification_rate_by_tree_size <- function(x) {
+adaModel = gbm(y ~ .,
+              data = training,
+              distribution="bernoulli", #since it is a classification problem
+              n.trees=2000,
+              interaction.depth=x)
+
+adaModel_test_pred <- predict(adaModel, testing, n.trees = 2000, type = "response")
+
+misclassification_rate <- mean(as.factor(ifelse(adaModel_test_pred>=0.5,"Insoluble","Soluble"))!=testing$y)
+
+return(misclassification_rate)
+}
+
+misclassification_rates <- sapply(c(1,2,4,16),function(x) get_test_classification_rate_by_tree_size(x))
+
+t(misclassification_rates)
+
+misclassification_rates_plot <- cbind(misclassification_rates,c("stump","4-node tree","8-node tree","16-node tree")) %>%
+  as.data.frame() %>%
+  set_colnames(c("misclassification_rates","Tree_size")) %>%
+  mutate(misclassification_rates=as.numeric(as.character(misclassification_rates)),
+         Tree_size=factor(Tree_size, levels = c("stump","4-node tree","8-node tree","16-node tree")))
+
+ggplot(misclassification_rates_plot,
+         aes(x=Tree_size,
+             y=misclassification_rates,
+             label=percent(misclassification_rates))) + 
+geom_bar(stat='identity') + 
+geom_text(vjust=0) +
+scale_y_continuous(labels = percent) +
+  labs(title="Test-Set classification rates based on tree size",
+       subtitle="Iterations=2000")
+
+```
+
+Missclassification rate decreases as tree size increases.

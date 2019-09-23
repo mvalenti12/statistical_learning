@@ -1,0 +1,292 @@
+---
+title: "Practice on ROC and AUC"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+```
+
+1. Usa el script {\tt spam.R} para leer los datos de la SPAM e-mail database.
+
+```{r ej1, message=FALSE, warning=FALSE}
+
+
+# SPAM E-mail Database
+# downloaded from 
+# http://web.stanford.edu/~hastie/ElemStatLearn/datasets/spam.info.txt
+# http://web.stanford.edu/~hastie/ElemStatLearn/datasets/spam.data
+# http://web.stanford.edu/~hastie/ElemStatLearn/datasets/spam.traintest
+# 03-05-2016
+#
+# 
+# 
+
+library(caret)
+library(glmnet)
+library(nnet)
+library(class)
+library(pROC)
+library(ROC632)
+#setwd("C:/Users/DanEscario/Desktop/MESIO/Statistical learning/Pr?ctiques/Corbes ROC/DadesSpam")
+spam <- read.table("spambase.data.txt",sep=",")
+
+spam.names <- c(read.table("spambase.names.txt",sep=":",skip=33,nrows=53,as.is=TRUE)[,1],
+                "char_freq_#",
+                read.table("spambase.names.txt",sep=":",skip=87,nrows=3,as.is=TRUE)[,1],
+                "spam.01")
+
+names(spam) <- spam.names
+
+n<-dim(spam)[1]
+p<-dim(spam)[2]-1
+
+spam.01 <- spam[,p+1]
+spam.vars <- as.matrix(spam[,1:p])
+
+cat(paste("n = ",n,', p = ',p,sep=""))
+cat(paste("Proportion of spam e-mails =",round(mean(spam.01),2),sep=""))
+
+glm.spam <- glm(spam.01 ~ spam.vars,family=binomial)
+summary(glm.spam)
+```
+
+2. Separa un tercio de los datos para construir una muestra test. 
+Hazlo de forma que la formen un tercio de los e-mails marcados como SPAM, y un tercio de los marcadados como NO SPAM. El resto de los datos formarán la muestra de entrenamiento. 
+
+```{r ej2, echo=FALSE}
+
+set.seed(1234)
+
+spam.1 <- which(spam.01==1)
+spam.0 <- which(spam.01==0)
+n1 <- length(spam.1)
+n0 <- length(spam.0)
+
+spam.1.tr <- sort(sample(spam.1, round(2*n1/3)))
+spam.0.tr <- sort(sample(spam.0, round(2*n0/3)))
+
+spam.1.test <- setdiff(spam.1,spam.1.tr)
+spam.0.test <- setdiff(spam.0,spam.0.tr)
+
+spam.tr <- union(spam.1.tr,spam.0.tr)
+spam.test <- union(spam.1.test,spam.0.test)
+
+n.tr <- length(spam.tr)
+n.test <- length(spam.test)
+
+```
+
+3. Compararemos el comportamiento de 3 reglas discriminantes: 
+a. Regresión logística estimada por máxima verosimilitud (IRWLS, {\tt glm}).
+b. Regresión logística estimada mediante Lasso ({\tt glment}).
+c. Red neuronal ({\tt nnet})
+c. k-nn ({\tt knn} and {\tt knn.cv} from package {\tt})
+Usa la muestra de entrenamiento para fijar los {\em tunning parameters} y para estimar los parámetros de los diferentes métodos. 
+
+a. Regresión logística estimada por máxima verosimilitud (IRWLS, {\tt glm}).
+```{r ej3.a}
+glm.spam.tr <- glm(spam.01 ~ . , data=spam, subset=spam.tr, family=binomial)
+summary(glm.spam.tr)
+
+```
+
+b. Regresión logística estimada mediante Lasso ({\tt glmnet}).
+```{r ej3.b}
+spam.tr.df<-spam[spam.tr,]; 
+spam.tr.df.x<-spam.tr.df[,-58]
+# glmnet.spam.tr<- glmnet(x=as.matrix(spam.tr.df.x) , y=as.matrix(spam.tr.df$spam.01), family='binomial')
+glmnet.spam.tr<-glmnet::cv.glmnet(x=as.matrix(spam.tr.df.x) , y=as.matrix(spam.tr.df$spam.01), family='binomial')
+summary(glmnet.spam.tr)
+plot(glmnet.spam.tr)
+#coef(glmnet.spam.tr, s = "lambda.min")
+```
+
+c. k-nn ({\tt knn} and {\tt knn.cv} from package {\tt})
+```{r ej3.c}
+nnet.spam.tr<-nnet(x=as.matrix(spam.tr.df.x) , y=as.matrix(spam.tr.df$spam.01),size=7)
+summary(nnet.spam.tr)
+```
+
+d. k-nn ({\tt knn} and {\tt knn.cv} from package {\tt class})
+```{r ej3.d}
+#we use caret package to estimate the optimal K for the knn;
+trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+set.seed(3333)
+knn_fit <- train(as.factor(spam.01) ~., data = spam.tr.df, method = "knn",
+ trControl=trctrl,
+ #preProcess = c("center", "scale"),
+ tuneLength = 10)
+
+#selecting k=5
+spam.test.df<-spam[spam.test,]
+spam.test.df.x<-spam.test.df[,-58]
+cl=spam.tr.df[,58]
+knn.spam.tr<-class::knn(train=as.data.frame(spam.tr.df),
+                        test=as.data.frame(spam.test.df),
+                        cl,
+                        k=5,
+                        prob=TRUE)
+
+```
+
+
+4. Usa la muestra test para construir (y dibujar) la curva ROC y calcular la AUC para cada una de estas reglas.
+a. Regresión logística estimada por máxima verosimilitud (IRWLS, {\tt glm}).
+```{r ej4.a}
+names(spam.test.df) <- spam.names 
+pred.glm.spam.test <- predict(glm.spam.tr, newdata = spam.test.df, type="response")
+
+boxplot(pred.glm.spam.test ~ spam.test.df$spam.01)
+table1<-table( spam.test.df$spam.01, pred.glm.spam.test>.5 )
+table1p<-prop.table(table1)
+table1t<-table1p[1,1]+table1p[2,2];table1t
+
+roc(spam.test.df$spam.01 ~ pred.glm.spam.test, plot=TRUE)
+roc(spam.test.df$spam.01 ~ pred.glm.spam.test, smooth=TRUE, plot=TRUE, add=TRUE, col=4)
+
+
+J <- 201
+cut.points <- (0:J)/J
+ROC.obj <- ROC(status=spam.test.df$spam.01, marker=pred.glm.spam.test, cut.values=cut.points)
+plot(ROC.obj$FP, ROC.obj$TP, ylab="Sensitivity=True Positive Rates",
+     xlab="1-Specificity = False Positive Rates", type="s", lwd=2)
+ROC.obj$AUC
+AUC(sens=ROC.obj$TP, spec=1-ROC.obj$FP)
+```
+
+b. Regresión logística estimada mediante Lasso ({\tt glment}).
+```{r ej 4.b}
+pred.glmnet.spam.test <- predict(glmnet.spam.tr, 
+                                        newx= as.matrix(spam.test.df.x), 
+                                        type="response",
+                                        s = "lambda.min")
+
+boxplot(pred.glmnet.spam.test ~ spam.test.df$spam.01)
+table2<-table( spam.test.df$spam.01, pred.glmnet.spam.test>.5 )
+table2p<-prop.table(table2)
+table2t<-table2p[1,1]+table2p[2,2];table2t
+
+roc(spam.test.df$spam.01 ~ pred.glmnet.spam.test, plot=TRUE)
+roc(spam.test.df$spam.01 ~ pred.glmnet.spam.test, smooth=TRUE, plot=TRUE, add=TRUE, col=4)
+
+J <- 201
+cut.points <- (0:J)/J
+ROC.obj <- ROC(status=spam.test.df$spam.01, marker=pred.glmnet.spam.test, cut.values=cut.points)
+plot(ROC.obj$FP, ROC.obj$TP, ylab="Sensitivity=True Positive Rates",
+     xlab="1-Specificity = False Positive Rates", type="s", lwd=2)
+ROC.obj$AUC
+AUC(sens=ROC.obj$TP, spec=1-ROC.obj$FP)
+```
+c. Red neuronal ({\tt nnet})
+```{r ej 4.c}
+pred.nnet.spam.test <- predict(object=nnet.spam.tr, newdata=spam.test.df.x, type=c('raw','class') )
+
+boxplot(pred.nnet.spam.test ~ spam.test.df$spam.01)
+table2<-table( spam.test.df$spam.01, pred.nnet.spam.test>.5 )
+table2p<-prop.table(table2)
+table2t<-table2p[1,1]+table2p[2,2];table2t
+
+roc(spam.test.df$spam.01 ~ pred.nnet.spam.test, plot=TRUE)
+roc(spam.test.df$spam.01 ~ pred.nnet.spam.test, smooth=TRUE, plot=TRUE, add=TRUE, col=4)
+
+J <- 201
+cut.points <- (0:J)/J
+ROC.obj <- ROC(status=spam.test.df$spam.01, marker=pred.nnet.spam.test, cut.values=cut.points)
+plot(ROC.obj$FP, ROC.obj$TP, ylab="Sensitivity=True Positive Rates",
+     xlab="1-Specificity = False Positive Rates", type="s", lwd=2)
+ROC.obj$AUC
+AUC(sens=ROC.obj$TP, spec=1-ROC.obj$FP)
+```
+d. k-nn ({\tt knn} and {\tt knn.cv} from package {\tt class})
+```{r ej4.d}
+
+
+pred.knn.spam.test<-ifelse(unlist(knn.spam.tr)==1,
+       attributes(knn.spam.tr)$prob,
+       1-attributes(knn.spam.tr)$prob)
+
+boxplot(pred.knn.spam.test ~ spam.test.df$spam.01)
+table2<-table( spam.test.df$spam.01, pred.knn.spam.test )
+table2p<-prop.table(table2)
+table2t<-table2p[1,1]+table2p[2,2];table2t
+
+roc(spam.test.df$spam.01 ~ pred.knn.spam.test, plot=TRUE)
+roc(spam.test.df$spam.01 ~ pred.knn.spam.test, smooth=TRUE, plot=TRUE, add=TRUE, col=4)
+
+J <- 201
+cut.points <- (0:J)/J
+ROC.obj <- ROC(status=spam.test.df$spam.01, marker=pred.knn.spam.test, cut.values=cut.points)
+plot(ROC.obj$FP, ROC.obj$TP, ylab="Sensitivity=True Positive Rates",
+     xlab="1-Specificity = False Positive Rates", type="s", lwd=2)
+ROC.obj$AUC
+AUC(sens=ROC.obj$TP, spec=1-ROC.obj$FP)
+
+ 
+
+```
+Els valors de l'AUC(area sota la corba) s'empren en contexts de Machine learning com a estadistic per comparar models. Si l'AUC pren valor 1 el model es perfecte. Si l'AUC pren valor 0.5 el model es igual de be que una classificacio atzarosa. Si el model pren valor 0, es un model inutil ja que no classifica res be. 
+
+A traves de les corbes ROC es poden fer altres tipus de mesures per con?ixer la qualitat dels models de machine learning. Un exemple es el cas de l'estadistic J de Youden.
+L'index de Youden està definit com:
+
+L'index de Youden pot prendre valors entre -1 i 1. Si l'estadistic pren valor 1, el model de classificacio es perfecte. Si l'estad?stic pren valors entre -0.5 o 0.5 el classificador no t? cap utilitat, es pur soroll. Si l'estad?stic pren valor -1, el model classifica just de forma contraria a la forma correcte, aquest es un cas pervers pero util en que hauriem d'adjudicar els objectes l'etiqueta contraria de la predita, obtenint aixo una classificacio perfecta.
+------------------------------------------------------------------------------------------
+
+
+5. Calcula también la tasa de error de cada regla cuando se usa $c=1/2$. 
+```{r ej5}
+
+### a. Regresión logística estimada por máxima verosimilitud (IRWLS, {\tt glm}).
+a5<-1 - sum(diag(table( spam.test.df$spam.01, pred.glm.spam.test>.5 )))/n.test
+
+### b. Regresión logística estimada mediante Lasso ({\tt glment}).
+b5<-1 - sum(diag(table( spam.test.df$spam.01, pred.glmnet.spam.test>.5 )))/n.test
+### c. Red neuronal ({\tt nnet})
+c5<-1 - sum(diag(table( spam.test.df$spam.01, pred.nnet.spam.test>.5 )))/n.test
+### d. k-nn ({\tt knn} and {\tt knn.cv} from package {\tt class})
+d5<-1 - sum(diag(table( spam.test.df$spam.01, pred.knn.spam.test>.5 )))/n.test
+#1 - sum(diag(table( spam.test.df$spam.01, pred.cv.knn.spam.test>.5 )))/n.test
+
+aux<-cbind(c("Regresión logística estimada por máxima verosimilitud (IRWLS, {\tt glm})",
+  "Regresión logística estimada mediante Lasso ({\tt glment})",
+  "Red neuronal ({\tt nnet})",
+  "k-nn ({\tt knn} and {\tt knn.cv} from package {\tt class})"),c(a5,b5,c5,d5))
+
+colnames(aux)<-c("Regla","tasa de error")
+kable(aux,digits=3)
+```
+
+# 6, Calcula $\ell_{\mbox{val}}$ para cada regla.
+\ell_{\mbox{val}}(g_S) =  \frac{1}{m}\sum _{j=1}^m \left( y_j^v \log g_S(\bx_j^v) + (1-y_j^v) \log (1-g_S(\bx_j^v)) \right).
+
+```{r ej6}
+epsilon<-.Machine$double.eps
+
+### a. Regresión logística estimada por máxima verosimilitud (IRWLS, {\tt glm}).
+a6<-mean( spam.test.df$spam.01*log(pred.glm.spam.test+epsilon) + 
+                   (1-spam.test.df$spam.01+epsilon)*log(1-pred.glm.spam.test))
+
+### b. Regresión logística estimada mediante Lasso ({\tt glment}).
+b6<-sum(spam.test.df$spam.01*log(pred.glm.spam.test+epsilon) + 
+                   (1-spam.test.df$spam.01+epsilon)*log(1-pred.glmnet.spam.test+epsilon),na.rm=TRUE)/sum(!is.na(pred.glmnet.spam.test))
+### c. Red neuronal ({\tt nnet})
+c6<-sum( spam.test.df$spam.01*log(pred.nnet.spam.test+epsilon) + 
+        (1-spam.test.df$spam.01+epsilon)*log(1-pred.nnet.spam.test+epsilon))/sum(!is.na(pred.nnet.spam.test))
+### d. k-nn ({\tt knn} and {\tt knn.cv} from package {\tt class})
+d6<-sum( spam.test.df$spam.01*log(pred.glm.spam.test+epsilon) + 
+                   (1-spam.test.df$spam.01+epsilon)*log(1-pred.knn.spam.test+epsilon))/sum(!is.na(pred.knn.spam.test))
+
+
+aux<-cbind(c("Regresión logística estimada por máxima verosimilitud (IRWLS, {\tt glm})",
+  "Regresión logística estimada mediante Lasso ({\tt glment})",
+  "Red neuronal ({\tt nnet})",
+  "k-nn ({\tt knn} and {\tt knn.cv} from package {\tt class})"),c(a6,b6,c6,d6))
+colnames(aux)<-c("Regla","$\ell_{\mbox{val}}$")
+kable(aux,digits=3, escape = FALSE)
+
+```
+

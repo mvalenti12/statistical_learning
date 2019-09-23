@@ -1,0 +1,662 @@
+---
+title: 'Assignment: Artificial Neural Networks & Deep Learning'
+author: "Daniel Fuentes, Marc Valenti"
+date: "5/10/2018"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+
+libraries <- c("dplyr", "keras", "magick" ,"abind","parallel",'doParallel',"foreach","devtools","neuralnet", "NeuralNetTools", "caret", "OpenImageR", "RANN","reshape2")
+check.libraries <- is.element(libraries, installed.packages()[, 1])==FALSE
+libraries.to.install <- libraries[check.libraries]
+if (length(libraries.to.install!=0)) {
+  install.packages(libraries.to.install)
+}
+
+#faltava aqesta part
+lapply(libraries, require, character.only=TRUE)
+
+# cl <- makePSOCKcluster(4)
+# registerDoParallel(cl)
+# 
+# stopCluster(cl)
+
+```
+
+Data sets: Caltech 101 Description
+
+In the web page: 
+≤http://www.vision.caltech.edu/Image_Datasets/Caltech101/>  
+there are pictures of objects belonging to 101 categories. About 40 to 800 images per category. Most categories have about 50 images. Collected in September 2003 by Fei-Fei Li, Marco Andreetto, and Marc ’Aurelio Ranzato. The size of each image is roughly 300 x 200 pixels.
+
+#NN architectures
+
+**- Select five categories from caltech101 collection. Try to select balanced categories with representative number of images.**
+
+
+```{r importing}
+#only replace the path_images string with where the dataset of pictures from http://www.vision.caltech.edu/Image_Datasets/Caltech101/ is downloaded in your computer 
+
+#path_images <- "C:/Users/DanEscario/Desktop/MESIO/Statistical learning/Pr?ctiques/XarxaNeural/101_ObjectCategories/"
+path_images <- "~/Desktop/101_ObjectCategories/"
+
+categories <- list.files(path=path_images)
+
+number_images <- rep(NA,length(categories))
+
+for (i in 1:length(categories)){
+  number_images[i]<-list.files(path=paste0(path_images,categories[i])) %>%
+  length()
+}
+
+selected_categories <- categories[number_images%in%(86:88)]
+```
+
+
+After inspecting the number of images of every category, we have ended up choosing *`r toString(selected_categories)`*, which have *`r number_images[categories%in%selected_categories]`* images each.
+
+
+
+```{r importing_images}
+# input_size <- 128 # Width and height of images supplied to the input of a neural network
+# epochs <- 30 # The number of epochs
+# batch_size <- 16 # Batch size
+# orig_width <- 300 # Original image width
+# orig_height <- 200 # Height of source images
+# train_samples <- 5088 # Size of training sample
+# train_index <- sample (1: train_samples, round (train_samples * 0.8)) # 80%
+# val_index <- c (1: train_samples) [- train_index]
+# # Folders with pictures
+images_dir <- path_images
+# masks_dir <- "input / train_masks /"
+
+
+
+image_to_grey <- function(image_file,
+                       target_width = 32, 
+                       target_height = 32) {
+    img <- image_read(image_file) %>% 
+      image_convert(colorspace = "gray") %>%
+      image_scale(paste0(target_width, "x", target_height, "!")) 
+    img
+}
+
+img2arr <- function(image) {
+    result <- as.numeric(image[[1]])
+    return(result)
+}
+
+
+#llegeix i escala la imatge
+img <- image_to_grey(paste0(path_images,"bonsai/image_0013.jpg"))
+#converteix la imatge en un array
+img_test <- as.numeric(image_to_grey(paste0(path_images,"bonsai/image_0012.jpg"))[[1]])
+
+```
+
+
+**Implements a classifier fed with the HOG descriptors that learns the category to which a given image belongs. In HOG use 3 cells and 9 orientations. Compare the performance of two NN architectures:V **
+**1. Layer 1: 81 units (input layer), Layer 2: 10 units (hidden layer), Layer 3: 5 units (output layer),  **
+**2. Layer 1: 81 units (input layer), Layer 2: 50 units (hidden layer), Layer 3: 25 units (hidden layer), Layer 4: 5 units (output layer).**
+
+```{r}
+obtain_images_to_HOG <- function(x,
+                                 vector_categories,
+                                 number_cells=3,
+                                 number_orientations=9
+                                 ){
+  
+  #gets the list of the files in a given directory first.
+  imgs <- list.files(paste0(images_dir,vector_categories[x]), 
+                   pattern = ".jpg",
+                   full.names = TRUE)
+  #creates an auxiliary matrix where we will place the results.
+  #every row is a image. it first contains the label, and then the 1024 vector
+  dt_img <- as.data.frame(rep(vector_categories[x],number_images[categories==vector_categories[x]]))
+  colnames(dt_img)<-"label"
+  dt_img[,2:82]<-0
+  
+  #we iterate on all the images
+  for(i in 1:length(imgs)) {
+    if(length(dim(readImage(imgs[i])))==3){
+    img <- readImage(imgs[i]) %>%
+      rgb_2gray() %>%
+      resizeImage(width = 32,
+                  height = 32,
+                  method = "nearest") %>%
+      HOG(cells=number_cells,
+          orientations=number_orientations)
+    dt_img[i,2:82] <- img
+    }
+    }
+
+  return(dt_img)
+}
+
+dt_HOG <- rbind(obtain_images_to_HOG(1,vector_categories=selected_categories),
+                obtain_images_to_HOG(2,selected_categories),
+                obtain_images_to_HOG(3,selected_categories),
+                obtain_images_to_HOG(4,selected_categories),
+                obtain_images_to_HOG(5,selected_categories))
+
+trainIndex <- createDataPartition(dt_HOG$label, p=.7, list=F)
+dmy <- dummyVars(" ~ label", data = dt_HOG)
+dmy_aux <- data.frame(predict(dmy, newdata = dt_HOG))
+y_dt_HOG<-dt_HOG$label 
+dmy_aux <- data.frame(apply(dmy_aux, 2, function(x) (as.numeric(as.character(x)))))
+dt_HOG <- cbind(dt_HOG,dmy_aux)
+dt_HOG$label<-NULL
+
+resp_var_HOG <- names(select(dmy_aux,starts_with("label")))
+xnam <- names(dt_HOG[!names(dt_HOG)%in%resp_var_HOG])
+
+(fmla <- as.formula(paste(paste(resp_var_HOG,collapse="+"), "~", paste(xnam, collapse= "+"))))
+
+
+
+dt_HOG_train <- dt_HOG[trainIndex, ]
+dt_HOG_test <- dt_HOG[-trainIndex, ]
+
+HOG_grid_10 = expand.grid(layer1 = 10,
+                          layer2 = 0,
+                          layer3 = 0)
+
+HOG_10_CPU_time <- Sys.time()
+
+HOG.fit_10 = neuralnet(fmla, 
+                       data = dt_HOG_train,
+                       hidden= 10,
+                       linear.output=FALSE) 
+
+HOG_10_CPU_time <- Sys.time() - HOG_10_CPU_time
+
+HOG_grid_50 = expand.grid(layer1 = 50,
+                       layer2 = 25,
+                       layer3=5)
+
+HOG_50_CPU_time <- Sys.time()
+
+HOG.fit_50 = neuralnet(fmla, 
+                       data = dt_HOG_train,
+                       hidden= c(50, 25),
+                       linear.output=FALSE) 
+
+HOG_50_CPU_time <- Sys.time() - HOG_50_CPU_time
+
+
+maxidx <- function(row) {
+  return(which(row == max(row)))
+}
+# Plot model and predict
+#plotnet(HOG.fit_10) #dona error: "Error in plotnet(HOG.fit): object HOG.fit not found"
+train_pred_10 <- compute(HOG.fit_10, dt_HOG_train[,!names(dt_HOG_train) %in% resp_var_HOG])$net.result %>%
+  apply(1, maxidx)
+  
+test_pred_10 <- compute(HOG.fit_10, dt_HOG_test[,!names(dt_HOG_test) %in% resp_var_HOG])$net.result %>%
+  apply(1, maxidx)
+
+#plotnet(HOG.fit_50)
+train_pred_50 <- compute(HOG.fit_50, dt_HOG_train[,!names(dt_HOG_train) %in% resp_var_HOG])$net.result %>%
+  apply(1, maxidx)
+test_pred_50 <- compute(HOG.fit_50, dt_HOG_test[,!names(dt_HOG_test) %in% resp_var_HOG])$net.result %>%
+  apply(1, maxidx)
+
+
+```
+
+
+**3. Reshape grayscale images to 32x32. Vectorize images by rows, to get a 1024-vector
+representation of each image. Implement a NN with two hidden layers that uses such a
+vectors as input data for learning image categories. Tune the number of neurons in each
+hidden layer using a grid search procedure.  ** 
+
+```{r reshaping and vectorizing}
+#let's create the dataset first:
+#the function obtain_images, would allow us to do this
+
+obtain_images <- function(x,vector_categories){
+  
+  #gets the list of the files in a given directory first.
+  imgs <- list.files(paste0(images_dir,selected_categories[x]), 
+                   pattern = ".jpg",
+                   full.names = TRUE)
+  #creates an auxiliary matrix where we will place the results.
+  #every row is a image. it first contains the label, and then the 1024 vector
+  dt_img <- as.data.frame(rep(vector_categories[x],number_images[categories==vector_categories[x]]))
+  colnames(dt_img)<-"label"
+  dt_img[,2:1025]<-0
+  
+  #we iterate on all the images
+  for(i in 1:length(imgs)) {
+    img <- image_to_grey(imgs[i])
+    dt_img[i,2:1025] <- as.vector(img2arr(img))
+    }
+
+  return(dt_img)
+}
+
+#we create the dataset by row binding the different categories
+dt_ex3 <- rbind(obtain_images(1,selected_categories),
+            obtain_images(2,selected_categories),
+            obtain_images(3,selected_categories),
+            obtain_images(4,selected_categories),
+            obtain_images(5,selected_categories))
+
+#let's see if that works!
+matrix(unlist(dt_ex3[30,-1]), nrow = 32, byrow = TRUE) %>%
+  image(col=grey.colors(255))
+
+image_read(paste0(list.files(paste0(images_dir,selected_categories[1]), 
+                             pattern = ".jpg",
+                             full.names = TRUE))[30])
+#It does! it just acts as a mirror.
+
+#write.csv2(dt,file="data_free_categories_nn.csv")
+```
+
+```{r NN two hidden grid.search, warning=FALSE}
+
+trainIndex <- createDataPartition(dt_ex3$label, p=.7, list=F)
+dt_ex3_train <- dt_ex3[trainIndex, ]
+dt_ex3_test <- dt_ex3[-trainIndex, ]
+
+xnam <- names(dt_ex3_train[-1])
+resp_var <- paste0(levels(dt_ex3_train$label),collapse=" + ")
+(fmla <- as.formula(paste(resp_var, "~", paste(xnam, collapse= "+"))))
+
+
+my.grid <- expand.grid(size=seq(from=1,to=10,by=2), 
+                       decay=seq(from=0.1,to=1,by=0.2))
+ex3_grid_search_time<-Sys.time()
+ex3.fit <- train(label ~ .,
+                 data = dt_ex3_train,
+                 method = "nnet", 
+                 tuneGrid = my.grid, 
+                 verbose=FALSE, 
+                 preProc =  c('center', 'scale', 'knnImpute', 'pca'),
+                 trControl = trainControl(method = "cv", 
+                                          verboseIter = FALSE, 
+                                          number = 5,
+                                          returnData = FALSE)
+                 # ,MaxNWts=1036
+                 ) 
+ex3_grid_search_time<-Sys.time() - ex3_grid_search_time
+
+plot(ex3.fit)
+```
+Doing the grid search procedure with a 5 fold CV has taken `r ex3_grid_search_time`. The CPU time in this case will be a function of how big our grid.search is and how many folds the CV has. Therefore, we now estimate the new CPU time with the
+best tune: `r ex3.fit$bestTune$size` as size and `r ex3.fit$bestTune$decay` as decay. 
+
+
+
+
+```{r NN two hidden fit}
+
+my.grid <- expand.grid(size=ex3.fit$bestTune$size, 
+                       decay=ex3.fit$bestTune$decay)
+
+ex3_fit_time<-Sys.time()
+ex3.fit <- train(label ~ .,
+                 data = dt_ex3_train,
+                 method = "nnet", 
+                 tuneGrid = my.grid, 
+                 verbose=FALSE, 
+                 preProc =  c('center', 'scale', 'knnImpute', 'pca'),
+                 trControl = trainControl(method = "cv", 
+                                          verboseIter = FALSE, 
+                                          number = 10,
+                                          returnData = FALSE)
+                 # ,MaxNWts=1036
+                 ) 
+ex3_fit_time<-Sys.time() - ex3_fit_time
+
+
+train_pred_ex3 <- predict(ex3.fit, newdata=dt_ex3_train, type="raw")
+test_pred_ex3 <- predict(ex3.fit, newdata=dt_ex3_test, type="raw")
+```
+
+
+**4. Compare these three NN model at least in two characteristics: the performance and CPU
+time.** 
+
+```{r}
+
+
+taulahog10<-(table(test_pred_10, max.col(dt_HOG_test[,names(dt_HOG_test)%in%resp_var_HOG])));
+cmhog10<-confusionMatrix(taulahog10);cmhog10
+
+taulahog50<-(table(test_pred_50, max.col(dt_HOG_test[,names(dt_HOG_test)%in%resp_var_HOG])));
+cmhog50<-confusionMatrix(taulahog50);cmhog50
+
+taulaex3<-(table(test_pred_ex3, dt_ex3_test[,'label']));
+cmex3<-confusionMatrix(taulaex3); cmex3
+
+
+data.frame(accuracy=c(cmhog10$overall[1],cmhog50$overall[1],cmex3$overall[1]),
+           CPU_seconds=c(HOG_10_CPU_time,HOG_50_CPU_time, ex3_fit_time),
+           model=c("HOG_10","HOG_50","NN_2_Hidden")) %>%
+  melt(id.var="model") %>%
+  ggplot(aes(x=variable,
+             y=value,
+             fill=model)) + 
+  geom_bar(stat='identity',
+           position="dodge") + 
+  facet_wrap(~variable,scales="free")
+
+
+       
+```
+We believe that the three models are not comparable. The HOG ones are, but comparing them to the NN with 2 hidden layers makes less sense, This is due to:
+- The format of the images is not the same. HOG is a vector of 81 elements, whereas the neural network has a longer length: 1024. Therefore, HOG_50 takes longer than HOG_10 as it is more complex; but comparing it with the other alternative makes less sense. The Neural Network is the one that takes longer to compute. On the other hand, Neural Network with caret implements a 5 fold CV, whereas the raw implementation of neuralnet doesnt.
+
+PERFORMANCE: In terms of performance, HOG_10 has the best one.
+
+
+#CNN architectures:
+
+**Categories: airplanes (800), Motorbikes (798) and Faces (435) are large categories. For
+each category reshape grayscale images to 32x32. Split the dataset in two halves (training
+and test). From the training part, fit a CNN according with the model**
+```{r ,eval=FALSE}
+categories_ex5 <- c("airplanes","Motorbikes","Faces")
+
+obtain_images_to_keras <- function(x,vector_categories){
+  
+  #gets the list of the files in a given directory first.
+  path_imgs <- list.files(paste0(images_dir,vector_categories[x]), 
+                   pattern = ".jpg",
+                   full.names = TRUE)
+  #creates an auxiliary matrix where we will place the results.
+  #every row is a image. it first contains the label, and then the 1024 vector
+  dt_img<-list()
+  #we iterate on all the images
+  for(i in 1:length(path_imgs)) {
+    img <- image_to_grey(path_imgs[i]) %>%
+      img2arr()
+    dt_img [[i]]<- img
+    }
+  dt_img <- array(unlist(dt_img), dim = c(length(path_imgs), 32, 32))
+  return(dt_img)
+}
+
+
+airplanes.array<-obtain_images_to_keras(1,categories_ex5)
+dim(airplanes.array)
+motorbikes.array<-obtain_images_to_keras(2,categories_ex5)
+dim(motorbikes.array)
+faces.array<-obtain_images_to_keras(3,categories_ex5)
+dim(faces.array)
+
+
+dt_ex5 <- abind(obtain_images_to_keras(1,categories_ex5),
+            obtain_images_to_keras(2,categories_ex5),along=1)
+dt_ex5 <- abind(dt_ex5,obtain_images_to_keras(3,categories_ex5),along=1)
+
+
+labels_ex5 <- c(rep(categories_ex5[1],number_images[categories==categories_ex5[1]]),
+           rep(categories_ex5[2],number_images[categories==categories_ex5[2]]),
+           rep(categories_ex5[3],number_images[categories==categories_ex5[3]])) %>%
+  as.factor() %>%
+  as.numeric
+
+index <- sample(1:dim(dt_ex5)[1],(2/3)*dim(dt_ex5)[1])
+
+x_train <- dt_ex5[index,,]
+x_test <- dt_ex5[-index,,]
+
+x_train <- array_reshape(x_train, c(nrow(x_train), 32, 32 ,1))
+x_test <- array_reshape(x_test, c(nrow(x_test), 32, 32 ,1))
+
+y_train<- array(labels_ex5[index])
+y_test<- array(labels_ex5[-index])
+y_train <- to_categorical(y_train-1, 3)
+y_test <- to_categorical(y_test-1, 3)
+
+input_shape<-c(32, 32, 1)
+
+#checking the dimensions
+dim(x_train) 
+``` 
+
+
+ **5. Convolution layer with:
+. filters = 20, kernel_size = c(3,3), activation = 'relu',
+. Pooling layer with: pool_size = c(2, 2)
+. Fully connected layer with: units = 128, activation = 'relu'
+. Output layer with: units = num_classes, activation = 'softmax'
+. Assess the performance of the CNN predicting the categories of test images and
+obtain the confusion matrix. **
+
+
+
+```{r, eval=FALSE}
+num_classes<-3
+start5time<-Sys.time()
+##Model Convolutional Neural Network. documentation from --> https://keras.io/
+###En primer lloc cal instalar Anaconda. En segon lloc executes: library(keras) , install_keras(). Un cop fet aix? ja es pot construir el model.
+input.shape<-c(32,32,1)
+time<-Sys.time()
+model5 <-keras_model_sequential()%>%
+layer_conv_2d(filters=20, kernel_size=c(3,3),activation='relu', input_shape = input.shape)%>%
+layer_max_pooling_2d(pool_size=c(2,2))%>%
+layer_flatten()%>%
+layer_dense(units=128, activation='relu')%>%
+layer_dense(units=num_classes, activation='softmax')
+
+#opt<-optimizer_adam( lr= 0.0001 , decay = 1e-6 )
+model5 %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = 'accuracy'
+)
+
+summary(model5)
+
+model5cnnet <- model5 %>% fit(
+  x_train, y_train, 
+  epochs = 20, batch_size = 128, 
+  validation_split = 0.2
+)
+end5tyme<-Sys.time()
+plotmodel5cnnet<-plot(model5cnnet);plotmodel5cnnet
+```
+
+```{r, eval=FALSE}
+model5cnnettest <- predict(model5, x_test)
+```
+
+
+**6. From the training part, fit a CNN according with a model proposed by yourself.
+. Describe the model.
+. Assess the performance of the CNN predicting the categories of test images and
+obtain the confusion matrix**
+. filters = 30, kernel_size = c(3,3), activation = 'tanh',
+. Pooling layer with: pool_size = c(3, 3)
+. Fully connected layer with: units = 128, activation = 'tanh'
+. Output layer with: units = num_classes, activation = 'sigmoid'
+. Assess the performance of the CNN predicting the categories of test images and
+obtain the confusion matrix. **
+
+```{r , eval=FALSE}
+start6tyme<-Sys.time()
+input.shape<-c(32,32,1)
+time<-Sys.time()
+model6 <-keras_model_sequential()%>%
+layer_conv_2d(filters=30, kernel_size=c(3,3),activation='tanh', input_shape = input.shape)%>%
+layer_max_pooling_2d(pool_size=c(3,3))%>%
+layer_flatten()%>%
+layer_dense(units=128, activation='tanh')%>%
+layer_dense(units=3, activation='sigmoid')
+
+#opt<-optimizer_adam( lr= 0.0001 , decay = 1e-6 )
+model6 %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics = 'accuracy'
+)
+
+summary(model6)
+
+model6cnnet <- model6 %>% fit(
+  x_train, y_train, 
+  epochs = 12, batch_size = 128, 
+  validation_split = 0.2
+)
+end6tyme<-Sys.time()
+plotmodel6cnnet<-plot(model6cnnet);plotmodel6cnnet
+```
+
+```{r, eval=FALSE}
+
+model6cnnettest <- predict(model6, x_test)
+```
+
+**7. Compare these two CNN model at least in two characteristics: the performance and CPU
+time.**
+
+
+
+```{r, eval=FALSE}
+timemodel5cnnet<-end5tyme - start5time ;timemodel5cnnet
+timemodel6cnnet<-end6tyme - start6tyme ;timemodel6cnnet
+```
+
+```{r, eval=FALSE}
+loss5<-summary(model5cnnet$metrics$loss);loss5
+loss6<-summary(model6cnnet$metrics$loss);loss6
+```
+
+```{r, eval=FALSE}
+accuracy5<-summary(model5cnnet$metrics$acc);accuracy5
+accuracy6<-summary(model6cnnet$metrics$acc);accuracy6
+```
+
+```{r load_images_plots}
+imgs_to_load<-list.files("objects_to_load/objectesR")
+for (i in 1:length(imgs_to_load)){
+  load(paste0("objects_to_load/objectesR/",imgs_to_load[i]))  
+}
+
+data.frame(accuracy=c(accuracy5,accuracy6),
+           CPU_seconds=c(timemodel5cnnet,timemodel6cnnet),
+           loss=c(loss5,loss6),
+           model=c("ex_5","ex_6")) %>%
+  melt(id.var="model") %>%
+  ggplot(aes(x=variable,
+             y=value,
+             fill=model)) + 
+  geom_bar(stat='identity',
+           position="dodge") + 
+  facet_wrap(~variable,scales="free")
+
+```
+
+The best CNN model is the model5cnnet. Although its CPU time is sligthly higher than in model6cnnet, its performance is better. It also has a lower loss.
+
+------------------------------------------------------------------------------------------------
+
+**8. Compare the NN (in 3) with the CNN (in 5) in the analysis of airplanes, Motorbikes and
+Faces categories.**
+
+```{r}
+
+categories_ex5 <- c("airplanes","Motorbikes","Faces")
+dt_ex8 <- rbind(obtain_images(1,categories_ex5),
+            obtain_images(2,categories_ex5),
+            obtain_images(3,categories_ex5))
+
+```
+
+```{r ,eval=FALSE}
+
+trainIndex <- createDataPartition(dt_ex8$label, p=.7, list=F)
+dt_ex8_train <- dt_ex8[trainIndex, ]
+dt_ex8_test <- dt_ex8[-trainIndex, ]
+
+xnam <- names(dt_ex8_train[-1])
+resp_var <- paste0(levels(dt_ex8_train$label),collapse=" + ")
+(fmla <- as.formula(paste(resp_var, "~", paste(xnam, collapse= "+"))))
+
+
+my.grid <- expand.grid(size=seq(from=1,to=5,by=3), 
+                       decay=seq(from=0.1,to=0.9,by=0.3))
+ex_8_grid_search_time<-Sys.time()
+ex8.fit <- train(label ~ .,
+                 data = dt_ex8_train,
+                 method = "nnet", 
+                 tuneGrid = my.grid, 
+                 MaxNWts=6036,
+                 trControl = trainControl(method = "cv", 
+                                          verboseIter = FALSE, 
+                                          number = 2,
+                                          returnData = FALSE),
+                 verbose=FALSE) 
+ex_8_grid_search_time<-Sys.time() - ex_8_grid_search_time
+
+save(ex_8_grid_search_time, file="objects_to_load/objectesR/ex_8_grid_search_time.RData")
+
+#for the optimized parameters
+my.grid <- expand.grid(size=ex8.fit$bestTune$size, 
+                       decay=ex8.fit$bestTune$decay)
+ex_8_fit_time <- Sys.time()
+ex8.fit <- train(label ~ .,
+                 data = dt_ex8_train,
+                 method = "nnet", 
+                 tuneGrid = my.grid, 
+                 MaxNWts=6036,
+                 trControl = trainControl(method = "cv", 
+                                          verboseIter = FALSE, 
+                                          number = 2,
+                                          returnData = FALSE),
+                 verbose=FALSE) 
+ex_8_fit_time <- Sys.time() - ex_8_fit_time
+
+# Plot model and predict
+#plotnet(ex8.fit)
+train_pred_ex8 <- predict(ex8.fit, newdata=dt_ex8_train[,-1], type="raw")
+test_pred_ex8 <- predict(ex8.fit, newdata=dt_ex8_test[,-1], type="raw")
+```
+
+
+
+```{r, eval=FALSE}
+imgs_to_load<-list.files("objects_to_load/objectesR")
+for (i in 1:length(imgs_to_load)){
+  load(paste0("objects_to_load/objectesR/",imgs_to_load[i]))  
+}
+
+taulaex8<-(table(test_pred_ex8, dt_ex8_test[,1]));
+cmex8<-confusionMatrix(taulaex8); sum(diag(cmex8$table))/sum(cmex8$table)
+
+save(ex_8_fit_time, file="objects_to_load/objectesR/ex_8_fit_time.RData")
+save(cmex8, file="objects_to_load/objectesR/cmex8.RData")
+
+```
+Doing the grid search is extremely costly for the NN in the nnet integration of caret. It took `r ex_8_grid_search_time` to do the grid.search, and after that `r ex_8_fit_time` to just fit the model for the optimized parameters. It was also limited using the parameter MaxNWts, otherwise the computation was taking really long.
+
+```{r metrics_evaluation}
+imgs_to_load<-list.files("objects_to_load/objectesR")
+for (i in 1:length(imgs_to_load)){
+  load(paste0("objects_to_load/objectesR/",imgs_to_load[i]))  
+}
+
+
+data.frame(accuracy=c(accuracy5,sum(diag(cmex8$table))/sum(cmex8$table)),
+           CPU_seconds=c(timemodel5cnnet,ex_8_fit_time),
+           model=c("ex_5 (CNN)","ex_3 (NN)")) %>%
+  melt(id.var="model") %>%
+  ggplot(aes(x=variable,
+             y=value,
+             fill=model)) + 
+  geom_bar(stat='identity',
+           position="dodge") + 
+  facet_wrap(~variable,scales="free")
+```
+
+Both performance wise (accuracy) and in terms of CPU time, the CNN is way better than the NN.
+

@@ -1,0 +1,128 @@
+---
+title: "GAMs for hirsutism data"
+output: html_document
+---
+
+Fit several GAM models (including semiparametric models) explaining FGm12 as a function of the variables that were measured at the beginning of the clinical trial (including FGm0) and Treatment(treated as factor). Use functions summary, plot and vis.gam to get an insight into the fitted models. Then use function anova to select among them the model (or models) that you think is (are) the most appropriate
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r data import}
+library(readr)
+library(mgcv)
+hirsutism <- read_delim("hirsutism.dat", "\t", escape_double = FALSE, trim_ws = TRUE)
+```
+
+```{r}
+h<-hirsutism[-c(8,28,36,42,43,53,60,83),]
+attach(h)
+```
+
+
+```{r}
+g1<-gam(FGm12~s(FGm0)+Treatment)
+summary(g1)
+plot(g1,pages=1,residuals=TRUE)
+gam.check(g1)
+vis.gam(g1)
+```
+
+```{r}
+g2<-gam(FGm12~s(FGm0,Treatment,DiaPres,SysPres,weight,height,k=85))
+summary(g2)
+#plot(g2,pages=1,residuals=TRUE)
+gam.check(g2)
+vis.gam(g2)
+```
+
+```{r}
+g3<-gam(FGm12~s(FGm0,k=8) +
+              s(Treatment,k=4) +
+              s(DiaPres, k=4) +
+              s(SysPres,k=4) +
+              s(weight,k=4) +
+              s(height,k=18))
+summary(g3)
+plot(g3,pages=1,residuals=TRUE)
+gam.check(g3)
+vis.gam(g3)
+```
+
+
+```{r}
+g4<-gam(FGm12~s(height,k=20)+Treatment+s(FGm0,k=20)+DiaPres+SysPres+s(weight,k=10))
+summary(g4)
+plot(g4,pages=1,residuals=TRUE)
+gam.check(g4)
+vis.gam(g4)
+```
+
+```{r}
+g5<-gam(FGm12~Treatment+s(height,k=27)+s(SysPres, k=4))
+summary(g5)
+plot(g5,pages=1,residuals=TRUE)
+gam.check(g5)
+vis.gam(g5)
+```
+```{r}
+g6<-gam(FGm12~s(height,k=23)+s(SysPres,weight, k=3)+s(FGm0,k=8)+Treatment)
+summary(g6)
+plot(g6,pages=1,residuals=TRUE)
+gam.check(g6)
+vis.gam(g6)
+
+```
+
+```{r}
+anova(g1,g2,test="F")
+#g1 = g2
+```
+```{r}
+anova(g1,g3,test='F')
+#g3>g1
+```
+```{r}
+anova(g1,g4,test='F')
+#g4>g1
+```
+```{r}
+anova(g1,g5,test='F')
+#g5>g1
+```
+```{r}
+anova(g1,g6,test='F')
+#g6>g1
+```
+
+```{r}
+anova(g3,g4,test='F')
+#g4>g3
+```
+```{r}
+anova(g3,g5,test='F')
+#g5>g3
+```
+```{r}
+anova(g3,g6,test='F')
+#g6>g3
+```
+
+```{r}
+anova(g4,g5,test='F')
+#g5>g4, per? nivell significaci? el considerarem insuficient, aix? que g5=g4. Ambd?s s?n millors que el g3
+```
+
+```{r}
+anova(g4,g6,test='F')
+#g6>g4
+```
+
+```{r}
+anova(g5,g6,test='F')
+#g6>g5
+```
+
+El millor model es el g6

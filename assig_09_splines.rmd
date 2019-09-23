@@ -1,0 +1,99 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(splines)
+
+load("bikes.Washington.Rdata")
+source("IRWLS_logistic_regression.R")
+attach(bikes)
+```
+
+1.Consider the nonparametric regression of cnt as a function of instant. Estimate the regression function m(instant) of cnt as a function of instant using a cubic regression splines estimated with the R function smooth.splines and choosing the smoothing parameter by Generalized Cross Validation.
+```{r, warning=FALSE}
+
+
+smooth.bikes.1<-smooth.spline(x=instant, y =cnt, 
+                         cv = FALSE, 
+                         all.knots = FALSE) #cv= FALSE implica fer Generalized Cross Validation
+
+```
+
+a) Which is the value of the chosen penalty parameter lambda?
+```{r}
+print(smooth.bikes.1$lambda)
+```
+
+b) Which is the corresponding equivalent number of degrees of freedom df?
+```{r}
+print(smooth.bikes.1$df)
+```
+
+c) How many knots have been used?
+```{r}
+print(smooth.bikes.1$fit$knot)
+print(smooth.bikes.1$fit$nk)
+```
+
+d) Give a graphic with the scatter plot and the estimated regression function m(instant)
+```{r}
+plot(x = instant, y = cnt)
+lines(smooth.bikes.1,col=4,lwd=2)
+```
+
+e)Estimate now m(instant) by unpenalized regression splines combining the R functions bs and lm, using the knots my.knots<- quantile(instant,((1:n.knots)-.5)/n.knots) where n.knots is the previous value of df minus 4.
+```{r}
+
+n.knots<- smooth.bikes.1$df - 4
+my.knots<- quantile(instant,((1:n.knots)-.5)/n.knots)
+k <- 1
+basise <- bs(x=instant,knots=my.knots,intercept=T,degree=k)
+lm.sple <- lm(cnt~basise)
+plot(instant,cnt,col=2,xlab="instant",ylab="cnt")
+lines(instant,lm.sple$fitted.values)
+abline(v=my.knots,lty=2,col="grey")
+
+```
+
+f) Give a graphic with the scatter plot and the two estimated regression functions
+```{r}
+plot(instant,cnt,col=1,xlab="instant",ylab="cnt")
+lines(smooth.bikes.1,col=4,lwd=2)
+lines(instant,lm.sple$fitted.values, col=2, lwd=2)
+```
+
+2.The script IRWLS logistic regression.R includes the definition of the function logistic.IRWLS.splines performing nonparametric logistic regression using splines with a IRWLS procedure. The basic syntax is the following: logistic.IRWLS.splines(x=..., y=..., x.new=..., df=..., plts=TRUE) where the arguments arr the explanatory variable x, the 0-1 response variable y, the vector x.new of new values of variable x where we want to predict the probability of y being 1 given that x is equal to x.new, the equivalent number of parameters (or model degrees of freedom) df, and the logical plts indicating if plots are desired or not.
+
+Define a new variable cnt.5000 taking the value 1 for days such that the number of total rental bikes is larger than or equal to 5000, on 0 otherwise.
+```{r}
+
+cnt.5000<-cnt
+bikes<-as.data.frame(bikes)
+bikes$cnt.5000<-cnt.5000
+
+for (i in 1:nrow(bikes)){
+  if (bikes$cnt.5000[i]>4999){
+  bikes$cnt.5000[i]=1
+  } else {
+    bikes$cnt.5000[i]=0
+  }
+  }
+
+```
+
+a) Use the function logistic.IRWLS.splines to fit the non-parametric binary regression cnt.5000 as a function of the temperature, using df=6. In which range of temperatures is Pr(cnt >= 5000jtemp) larger than 0,5 ?
+```{r}
+
+my.spline.glm.bikes<-logistic.IRWLS.splines(bikes$temp, bikes$cnt.5000,df=6,plts=TRUE)
+prediction<-which(my.spline.glm.bikes$fitted.values>0.5)
+range(bikes$temp[prediction])
+```
+
+b) (Optional) Choose the parameter df by k-fold cross validation with
+k = 5 and using df.v = 3:15 as the set of possible values for df.
+```{r}
+
+```
