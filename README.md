@@ -1,2 +1,2 @@
 # statistical_learning
-Assignments for the Statistical Learning subject from MESIO
+Assignments done by me for the Statistical Learning subject from MESIO
